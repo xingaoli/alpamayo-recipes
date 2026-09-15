@@ -10,4 +10,10 @@ data
 output_stage*
 *.egg-info
 
+# Local environment config (paths/credentials); copy from upstream .env.example
+.env
+# CoC recipe output dirs (output_stage* above covers the rest)
+output_coc_stage*
+output_sft_coc
+
 external_package/
