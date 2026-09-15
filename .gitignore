@@ -7,3 +7,5 @@ outputs/*
 *.egg-info
 output_stage*
 *.egg-info
+
+external_package/
