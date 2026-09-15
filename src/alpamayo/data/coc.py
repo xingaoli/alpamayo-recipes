@@ -13,13 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import io
 import json
 import os
 import pickle
+import zipfile
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import torch
+from physical_ai_av import egomotion, video
+from physical_ai_av.dataset import Features
 from alpamayo_r1.load_physical_aiavdataset_local import (
     BadLocalZipError,
     load_physical_aiavdataset_local,
@@ -31,6 +36,121 @@ from torch.utils.data import Dataset
 
 logger = logging.RankedLogger(__name__, rank_zero_only=True)
 logger.setLevel("INFO")
+
+
+class _LocalPAIFeatureReader:
+    """Minimal local PAI feature reader, inlined from the retired
+    ``pai_utils_fix.PhysicalAIAVDatasetLocalInterface`` so this module stays
+    self-contained. Only the surface used by ``COCDataset`` is kept:
+    per-clip feature reads (extrinsics / intrinsics / vehicle dimensions).
+    """
+
+    def __init__(
+        self,
+        local_dir: str,
+        clip_index_metadata: str = "clip_index.parquet",
+        features_metadata: str = "features.csv",
+        start_safe_margin_seconds: float = 1.6,
+        end_safe_margin_seconds: float = 6.4,
+    ) -> None:
+        self.local_dir = local_dir
+        self.start_safe_margin_seconds = start_safe_margin_seconds
+        self.end_safe_margin_seconds = end_safe_margin_seconds
+
+        features_df = pd.read_csv(
+            os.path.join(local_dir, features_metadata), index_col="feature"
+        )
+        features_df["clip_files_in_zip"] = features_df["clip_files_in_zip"].map(
+            json.loads, na_action="ignore"
+        )
+        self.features = Features(features_df)
+
+        self.clip_index = pd.read_parquet(os.path.join(local_dir, clip_index_metadata))
+        self._filter_clips_by_event_t0s()
+
+    def _filter_clips_by_event_t0s(self) -> None:
+        """Filter clip_index by event_t0s: keep only events where
+        event_t0 >= start_safe_margin_seconds (in us) and
+        event_t0 + end_safe_margin_seconds (in us) <= end_timestamp.
+        Remove rows whose event_t0s become empty after filtering.
+        """
+        if "event_t0s" not in self.clip_index.columns:
+            return
+        start_margin_us = int(self.start_safe_margin_seconds * 1_000_000)
+        end_margin_us = int(self.end_safe_margin_seconds * 1_000_000)
+        has_end = "end_timestamp" in self.clip_index.columns
+
+        def filter_events(row: pd.Series) -> np.ndarray:
+            et0s = row["event_t0s"]
+            if et0s is None or (hasattr(et0s, "__len__") and len(et0s) == 0):
+                return np.array([], dtype=np.int64)
+            arr = np.asarray(et0s, dtype=np.int64)
+            mask = arr >= start_margin_us
+            if has_end:
+                end_ts = int(row["end_timestamp"])
+                mask &= (arr + end_margin_us) <= end_ts
+            return arr[mask]
+
+        self.clip_index["event_t0s"] = self.clip_index.apply(filter_events, axis=1)
+        non_empty = self.clip_index["event_t0s"].apply(lambda x: x is not None and len(x) > 0)
+        removed = (~non_empty).sum()
+        self.clip_index = self.clip_index.loc[non_empty]
+        if removed > 0:
+            logger.info(
+                "filter_clip_index_by_event_t0s: removed %d rows with empty event_t0s after filtering",
+                removed,
+            )
+
+    def get_clip_chunk(self, clip_id: str) -> int:
+        """Returns the chunk index for `clip_id`."""
+        return self.clip_index.at[clip_id, "chunk"]
+
+    def get_clip_feature(self, clip_id: str, feature: str, maybe_stream: bool = False) -> Any:
+        if feature not in self.features.features_df.index:
+            logger.warning(
+                "Feature %r is not in features_df (available: %s). Returning None.",
+                feature,
+                list(self.features.features_df.index),
+            )
+            return None
+        chunk_filename = self.features.get_chunk_feature_filename(
+            self.get_clip_chunk(clip_id), feature
+        )
+        chunk_filename = os.path.join(self.local_dir, chunk_filename)
+        with open(chunk_filename, "rb") as f:
+            if chunk_filename.endswith(".parquet"):
+                return pd.read_parquet(f).loc[clip_id]
+            elif chunk_filename.endswith(".zip"):
+                clip_files_in_zip = self.features.get_clip_files_in_zip(clip_id, feature)
+                with zipfile.ZipFile(f, "r") as zf:
+                    if feature == "egomotion":
+                        egomotion_df = pd.read_parquet(
+                            io.BytesIO(zf.read(clip_files_in_zip["egomotion"]))
+                        )
+                        return egomotion.EgomotionState.from_egomotion_df(
+                            egomotion_df
+                        ).create_interpolator(egomotion_df["timestamp"].to_numpy())
+                    elif feature.startswith("camera"):
+                        return video.SeekVideoReader(
+                            video_data=io.BytesIO(zf.read(clip_files_in_zip["video"])),
+                            timestamps=pd.read_parquet(
+                                io.BytesIO(zf.read(clip_files_in_zip["frame_timestamps"]))
+                            )["timestamp"].to_numpy(),
+                        )
+                    else:
+                        logger.warning(
+                            f"Feature-specific data reader for {feature=} not implemented yet."
+                        )
+                        return {
+                            k: pd.read_parquet(io.BytesIO(zf.read(v)))
+                            if v.endswith(".parquet")
+                            else io.BytesIO(zf.read(v))
+                            for k, v in self.features.get_clip_files_in_zip(
+                                clip_id, feature
+                            ).items()
+                        }
+            else:
+                raise ValueError(f"Unexpected file extension: {chunk_filename=}.")
 
 
 class COCDataset(Dataset):
@@ -294,9 +414,8 @@ class COCDataset(Dataset):
                 sample_data[key] = sample_data[key].squeeze(0)
 
         if self.include_extr_intr:
-            from alpamayo.data.pai_utils_fix import PhysicalAIAVDatasetLocalInterface
             if not hasattr(self, "_avdi"):
-                self._avdi = PhysicalAIAVDatasetLocalInterface(
+                self._avdi = _LocalPAIFeatureReader(
                     local_dir=self.local_dir,
                     clip_index_metadata=self.clip_index_metadata,
                 )
