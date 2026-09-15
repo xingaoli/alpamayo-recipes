@@ -3,7 +3,9 @@ __pycache__/
 .venv/
 **/.venv/
 dist/
-outputs/*
+outputs
+ckpts
+data
 *.egg-info
 output_stage*
 *.egg-info
