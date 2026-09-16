@@ -13,8 +13,10 @@ data:
   # Samples follow the exact PAI contract (load_physical_aiavdataset_local):
   # 4-cam layout cross_left=0, front_wide=1, cross_right=2, front_tele=6
   # (front_tele is filled with pinhole_front; waymo has no narrow-FOV camera),
-  # ego reference frame is the vehicle pose. Schedule mirrors
-  # sft_base_pai_multi so train/val hyperparameters stay comparable.
+  # ego reference frame is the vehicle pose. Schedule follows the waymo_eval
+  # convention (1s t0 spacing, not PAI's 0.5s): with the ~19.8s @10Hz clip
+  # span, num_segments=20 candidates from 2s on yield 12 valid t0s per clip
+  # (t0 + 6.4s future must fit), i.e. ~797*12 train / ~202*12 val samples.
   train_dataset:
     _recursive_: false
     _target_: alpamayo.data.waymo_rds.RDSWaymoDataset
@@ -23,7 +25,7 @@ data:
     split: train
     num_segments: 20
     segment_start_us: 2000000
-    segment_step_us: 500000
+    segment_step_us: 1000000
     # Smoke-test / subsampling knobs (null = use all clips).
     max_clips: null
     clip_stride: 1
@@ -35,7 +37,7 @@ data:
     split: val
     num_segments: 20
     segment_start_us: 2000000
-    segment_step_us: 500000
+    segment_step_us: 1000000
     max_clips: null
     clip_stride: 1
     vla_preprocess_args:

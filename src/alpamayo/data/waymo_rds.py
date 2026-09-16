@@ -221,7 +221,7 @@ class RDSWaymoClip:
 
     # ------------------------------------------------------------------ samples
     def segment_t0s(self, num_segments: int = 20, segment_start_us: int = 2_000_000,
-                    segment_step_us: int = 500_000, num_history_steps: int = 16,
+                    segment_step_us: int = 1_000_000, num_history_steps: int = 16,
                     num_future_steps: int = 64, time_step: float = 0.1
                     ) -> list[int]:
         """PAIMultiSegmentDataset schedule, filtered by the real clip span."""
@@ -312,7 +312,7 @@ class RDSWaymoDataset(Dataset):
         clip_ids: list[str] | None = None,
         num_segments: int = 20,
         segment_start_us: int = 2_000_000,
-        segment_step_us: int = 500_000,
+        segment_step_us: int = 1_000_000,
         num_history_steps: int = 16,
         num_future_steps: int = 64,
         time_step: float = 0.1,
