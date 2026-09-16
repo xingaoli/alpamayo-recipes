@@ -56,6 +56,7 @@ LR=${LR:-1e-4}
 NUM_EPOCHS=${NUM_EPOCHS:-1}
 SAVE_STEPS=${SAVE_STEPS:-3000}
 EVAL_STEPS=${EVAL_STEPS:-1000}
+MAX_EVAL_STEPS=${MAX_EVAL_STEPS:-50} # per-rank eval batches per eval round; -1 = full val set
 NUM_WORKERS=${NUM_WORKERS:-16}
 # Optional (empty = no override): clip subset / step cap — smoke tests.
 MAX_TRAIN_CLIPS=${MAX_TRAIN_CLIPS:-}
@@ -86,6 +87,7 @@ OVERRIDES=(
     trainer.num_train_epochs="${NUM_EPOCHS}"
     trainer.save_steps="${SAVE_STEPS}"
     trainer.eval_steps="${EVAL_STEPS}"
+    evaluate.max_eval_steps="${MAX_EVAL_STEPS}"
     trainer.dataloader_num_workers="${NUM_WORKERS}"
 )
 [[ -n "$MAX_TRAIN_CLIPS" ]] && OVERRIDES+=("data.train_dataset.max_clips=${MAX_TRAIN_CLIPS}")

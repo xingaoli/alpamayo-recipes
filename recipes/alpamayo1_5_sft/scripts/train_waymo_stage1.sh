@@ -42,12 +42,13 @@ CONFIG_NAME=${CONFIG_NAME:-sft_waymo_stage1}
 # Base model for stage 1 — must be the A1-format conversion (see README).
 CKPT=${CKPT:-ckpts/Alpamayo-1.5-10B-A1-format}
 OUTPUT_DIR=${OUTPUT_DIR:-outputs/output_waymo_stage1}
-BATCH_SIZE=${BATCH_SIZE:-2}          # per-device train batch size
+BATCH_SIZE=${BATCH_SIZE:-4}          # per-device train batch size
 GRAD_ACCUM=${GRAD_ACCUM:-4}          # effective batch = bs * accum * NUM_GPUS
 LR=${LR:-1e-5}
 NUM_EPOCHS=${NUM_EPOCHS:-3}
-SAVE_STEPS=${SAVE_STEPS:-3000}
-EVAL_STEPS=${EVAL_STEPS:-1000}
+SAVE_STEPS=${SAVE_STEPS:-300}
+EVAL_STEPS=${EVAL_STEPS:--1}
+MAX_EVAL_STEPS=${MAX_EVAL_STEPS:-50} # per-rank eval batches per eval round; -1 = full val set
 NUM_WORKERS=${NUM_WORKERS:-16}
 # Optional (empty = no override): clip subset / step cap — smoke tests.
 MAX_TRAIN_CLIPS=${MAX_TRAIN_CLIPS:-}
@@ -71,6 +72,7 @@ OVERRIDES=(
     trainer.num_train_epochs="${NUM_EPOCHS}"
     trainer.save_steps="${SAVE_STEPS}"
     trainer.eval_steps="${EVAL_STEPS}"
+    evaluate.max_eval_steps="${MAX_EVAL_STEPS}"
     trainer.dataloader_num_workers="${NUM_WORKERS}"
     # DeepSpeed config must be an absolute path: Hydra changes the working
     # directory at runtime, so the relative path in sft_base_waymo.yaml may
