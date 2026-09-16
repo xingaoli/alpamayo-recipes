@@ -1,0 +1,36 @@
+defaults:
+  - sft_base_waymo
+  - /models/ar1_5_base@model
+  - _self_
+
+
+model:
+  # Local Qwen3-VL processor/config dir (same role as QWEN3_VL_PROCESSOR in
+  # .env): ar1_5_base.yaml defaults to the HF hub id, which requires network.
+  vlm_name_or_path: ckpts/Qwen3-VL-8B-Instruct-config
+trainer:
+  lr_multiplier:
+    vlm.model.visual: 0.1
+  ddp_find_unused_parameters: false
+  # Same memory profile as the PAI stage1 (bs 2 x accum 4 x 4 GPUs = 32);
+  # waymo frames (1280x1920) resize to the same max_pixels as PAI.
+  gradient_accumulation_steps: 4
+  # Full checkpoints (optimizer state included) so interrupted runs can resume.
+  learning_rate: 1e-5
+  warmup_steps: 500
+  per_device_train_batch_size: 2
+  dataloader_num_workers: 16
+  save_total_limit: 2
+  save_steps: 3000
+  # Periodic generation-based val metrics (ReasoningVLA_Trainer.evaluate + MetricRunner)
+  eval_strategy: steps
+  eval_steps: 1000
+paths:
+  # outputs/ is a symlink to large shared storage (5T parafs); the root fs
+  # (295G) cannot hold training checkpoints.
+  output_dir: outputs/output_waymo_stage1
+evaluate:
+  eval_ckpt: null
+  # Per-rank cap: 50 steps x bs 2 x 4 GPUs = 400 samples per eval.
+  # -1 = full val set — use for final numbers.
+  max_eval_steps: 50

@@ -1,0 +1,25 @@
+defaults:
+  - sft_base_waymo
+  - /models/ar1_5_expert@model
+  - _self_
+paths:
+  output_dir: outputs/output_waymo_stage2
+trainer:
+  gradient_checkpointing: false
+  deepspeed: null
+  ddp_find_unused_parameters: true
+  gradient_accumulation_steps: 1
+  # Same 80GB A100 memory ceiling as the PAI stage2: bs 4 with
+  # expandable_segments fits (see .env PYTORCH_CUDA_ALLOC_CONF).
+  per_device_train_batch_size: 4
+  dataloader_num_workers: 16
+  num_train_epochs: 1
+  save_steps: 3000
+  # Periodic generation-based val metrics (ReasoningVLA_Trainer.evaluate + MetricRunner)
+  eval_strategy: steps
+  eval_steps: 1000
+evaluate:
+  eval_ckpt: null
+  # Per-rank cap: 50 steps x bs 2 x 4 GPUs = 400 samples per eval.
+  # -1 = full val set — use for final numbers.
+  max_eval_steps: 50
