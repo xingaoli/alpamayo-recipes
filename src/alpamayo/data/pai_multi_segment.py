@@ -294,6 +294,89 @@ class PAIMultiSegmentDataset(Dataset):
                 f"(effective size: {len(self.clip_segment_t0s)})"
             )
 
+        # Drop clips whose local zips are missing/corrupt (e.g. truncated
+        # downloads) so a single bad shard cannot kill the DataLoader worker
+        # mid-epoch. Mirrors COCDataset._scan_bad_local_clips.
+        bad_chunks = self._scan_bad_local_chunks(self.avdi.clip_index, self.clip_ids, local_dir)
+        if bad_chunks:
+            bad_clip_ids = {
+                clip_id
+                for clip_id in self.clip_ids
+                if int(self.avdi.clip_index.loc[clip_id, "chunk"]) in bad_chunks
+            }
+            before = len(self.clip_segment_t0s)
+            self.clip_segment_t0s = [
+                (clip_id, t0_us)
+                for clip_id, t0_us in self.clip_segment_t0s
+                if clip_id not in bad_clip_ids
+            ]
+            logger.info(
+                f"Excluding {len(bad_clip_ids)} local clips "
+                f"({before - len(self.clip_segment_t0s)} samples) with missing/corrupt "
+                f"zips in chunks {sorted(bad_chunks)}; "
+                f"effective size: {len(self.clip_segment_t0s)}"
+            )
+            if not self.clip_segment_t0s:
+                raise ValueError(
+                    f"All clips excluded: every configured chunk is missing/corrupt "
+                    f"(bad chunks: {sorted(bad_chunks)}). Re-download the dataset."
+                )
+
+    @staticmethod
+    def _scan_bad_local_chunks(
+        clip_index_df: "pd.DataFrame",
+        clip_ids: list[str],
+        local_dir: str,
+    ) -> set[int]:
+        """Return chunk ids whose local zips (any camera / egomotion) are unusable.
+
+        Opening a zip reads its central directory, so a truncated download
+        (valid ``PK`` header, missing directory) is detected here. Over-filtering
+        a whole chunk is cheap and safe; under-filtering crashes the DataLoader
+        worker on the first bad shard.
+        """
+        camera_mode = os.environ.get("ALPAMAYO_CAMERA_MODE", "4cam")
+        if camera_mode == "2cam":
+            cams = ["camera_front_wide_120fov", "camera_front_tele_30fov"]
+        else:
+            cams = [
+                "camera_cross_left_120fov",
+                "camera_front_wide_120fov",
+                "camera_cross_right_120fov",
+                "camera_front_tele_30fov",
+            ]
+
+        chunks = sorted({int(clip_index_df.loc[clip_id, "chunk"]) for clip_id in clip_ids})
+        bad_chunks: set[int] = set()
+        for chunk in chunks:
+            chunk_bad = False
+            for cam in cams:
+                zip_path = os.path.join(local_dir, "camera", cam, f"{cam}.chunk_{chunk:04d}.zip")
+                if not os.path.exists(zip_path):
+                    chunk_bad = True
+                    break
+                try:
+                    with zipfile.ZipFile(zip_path) as zf:
+                        _ = zf.namelist()
+                except (zipfile.BadZipFile, OSError):
+                    chunk_bad = True
+                    break
+            if not chunk_bad:
+                ego_zip = os.path.join(
+                    local_dir, "labels", "egomotion", f"egomotion.chunk_{chunk:04d}.zip"
+                )
+                if not os.path.exists(ego_zip):
+                    chunk_bad = True
+                else:
+                    try:
+                        with zipfile.ZipFile(ego_zip) as zf:
+                            _ = zf.namelist()
+                    except (zipfile.BadZipFile, OSError):
+                        chunk_bad = True
+            if chunk_bad:
+                bad_chunks.add(chunk)
+        return bad_chunks
+
     def __len__(self) -> int:
         return len(self.clip_segment_t0s)
 

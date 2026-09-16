@@ -7,8 +7,12 @@
 RECIPE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$RECIPE_DIR"
 
-# Load environment variables (ALPAMAYO_WORKER_NUM_THREADS etc.) if present.
+# Load environment variables (ALPAMAYO_DATA_DIR etc.) if present. `set -a`
+# exports them: a plain `source` sets shell-only vars that never reach the
+# Python process.
+set -a
 source "$RECIPE_DIR/.env" 2>/dev/null || true
+set +a
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3}
 
@@ -23,8 +27,8 @@ export MALLOC_ARENA_MAX=$ALPAMAYO_WORKER_NUM_THREADS
 NUM_GPUS=${NUM_GPUS:-4}
 CONFIG_NAME=${CONFIG_NAME:-sft_stage2}
 
-# TODO: point at your Stage-1 output checkpoint directory.
-STAGE1_CKPT=${STAGE1_CKPT:-${RECIPE_DIR}/output_stage1/checkpoint-XXXX}
+# Stage-1 VLM output to load into the frozen VLM (overrides the pretrained one).
+STAGE1_CKPT=${STAGE1_CKPT:-${RECIPE_DIR}/outputs/output_stage1/checkpoint-XXXX}
 
 RESUME_ARGS=()
 if [[ -n "${RESUME_FROM_CHECKPOINT:-}" ]]; then

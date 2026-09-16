@@ -1,5 +1,5 @@
 defaults:
-  - sft_base
+  - sft_base_pai_multi
   - /models/ar1_5_base@model
   - _self_
 
@@ -7,10 +7,24 @@ trainer:
   lr_multiplier:
     vlm.model.visual: 0.1
   ddp_find_unused_parameters: false
+  # bs=8 OOMs on 80GB A100s with zero2; 2 x accum 4 x 4 GPUs = effective 32.
   gradient_accumulation_steps: 4
+  # Full checkpoints (optimizer state included) so interrupted runs can resume.
   learning_rate: 1e-5
   warmup_steps: 500
+  per_device_train_batch_size: 2
+  dataloader_num_workers: 16
+  save_total_limit: 2
+  save_steps: 3000
+  # Periodic generation-based val metrics (ReasoningVLA_Trainer.evaluate + MetricRunner)
+  eval_strategy: steps
+  eval_steps: 1000
 paths:
-  output_dir: output_stage1
+  # outputs/ is a symlink to large shared storage (5T parafs); the root fs
+  # (295G) cannot hold training checkpoints.
+  output_dir: outputs/output_stage1
 evaluate:
   eval_ckpt: null
+  # Per-rank cap: 50 steps x bs 2 x 4 GPUs = 400 samples (~7.5 min) per eval.
+  # -1 = full val set (3980 samples, ~75 min on 4 GPUs) — use for final numbers.
+  max_eval_steps: 50

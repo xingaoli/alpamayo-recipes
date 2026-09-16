@@ -8,7 +8,9 @@ RECIPE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$RECIPE_DIR"
 
 # Load environment variables (ALPAMAYO_COC_JSONL, ALPAMAYO_DATA_DIR, ALPAMAYO_WORKER_NUM_THREADS, ...)
+set -a
 source "$RECIPE_DIR/.env" 2>/dev/null || true
+set +a
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3}
 

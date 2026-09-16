@@ -43,9 +43,29 @@ logger = logging.RankedLogger("train", rank_zero_only=True)
 logger.setLevel("INFO")
 
 
+def _normalize_resume_from_checkpoint(resume_from_checkpoint):
+    if resume_from_checkpoint in (None, False):
+        return None
+
+    if resume_from_checkpoint is True:
+        # Let Trainer pick the latest checkpoint in output_dir
+        return True
+
+    checkpoint_path = os.path.abspath(os.path.expanduser(str(resume_from_checkpoint)))
+    if not os.path.isdir(checkpoint_path):
+        raise FileNotFoundError(f"resume_from_checkpoint does not exist: {checkpoint_path}")
+
+    return checkpoint_path
+
+
 @hydra.main(version_base=None, config_path=None, config_name="config")
 def train(cfg: DictConfig) -> None:
-    """Main training entry point."""
+    resume_from_checkpoint = _normalize_resume_from_checkpoint(
+        cfg.get("resume_from_checkpoint", None)
+    )
+    if resume_from_checkpoint:
+        logger.info(f"Resuming training from checkpoint: {resume_from_checkpoint}")
+
     perf = perf_plain(cfg)
     apply_runtime_optimizations({"optimizations": perf})
     if perf.get("zip_cache", False):
@@ -78,6 +98,12 @@ def train(cfg: DictConfig) -> None:
         logger.info(f"Initializing callback {cb_name}")
         callbacks.append(hyu.instantiate(cb_cfg, _convert_="partial"))
 
+    eval_metric_runner = None
+    if cfg.evaluate.get("metric_runner", None) is not None:
+        # Generation-based metric loop shared with evaluate_hf.py; wired into
+        # Trainer.evaluate() so trainer.eval_strategy shows val metrics in-training.
+        eval_metric_runner = hyu.instantiate(cfg.evaluate.metric_runner)
+
     trainer = ReasoningVLA_Trainer(
         model=model,
         args=training_args,
@@ -85,6 +111,9 @@ def train(cfg: DictConfig) -> None:
         eval_dataset=eval_dataset,
         data_collator=collate_fn,
         callbacks=callbacks,
+        eval_metric_runner=eval_metric_runner,
+        eval_torch_dtype=cfg.evaluate.get("torch_dtype", "bfloat16"),
+        eval_max_steps=cfg.evaluate.get("max_eval_steps", -1),
     )
 
     if "deepspeed" in cfg.trainer and cfg.trainer.deepspeed is not None:
@@ -104,7 +133,7 @@ def train(cfg: DictConfig) -> None:
             include_hydra_config=True,
         )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     if torch.distributed.is_initialized():
         torch.distributed.destroy_process_group()
 

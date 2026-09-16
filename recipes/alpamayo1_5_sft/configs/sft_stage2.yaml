@@ -1,12 +1,25 @@
 defaults:
-  - sft_base
+  - sft_base_pai_multi
   - /models/ar1_5_expert@model
   - _self_
 paths:
-  output_dir: output_stage2
+  output_dir: outputs/output_stage2
 trainer:
   gradient_checkpointing: false
   deepspeed: null
   ddp_find_unused_parameters: true
+  gradient_accumulation_steps: 1
+  # 16 and 8 both OOM on 80GB A100s (bs-scaled ~1.8GiB/sample alloc);
+  # 4 with expandable_segments fits. Upstream ran 16 on larger-memory GPUs.
+  per_device_train_batch_size: 4
+  dataloader_num_workers: 16
+  num_train_epochs: 1
+  save_steps: 3000
+  # Periodic generation-based val metrics (ReasoningVLA_Trainer.evaluate + MetricRunner)
+  eval_strategy: steps
+  eval_steps: 1000
 evaluate:
   eval_ckpt: null
+  # Per-rank cap: 50 steps x bs 2 x 4 GPUs = 400 samples (~7.5 min) per eval.
+  # -1 = full val set (3980 samples, ~75 min on 4 GPUs) — use for final numbers.
+  max_eval_steps: 50

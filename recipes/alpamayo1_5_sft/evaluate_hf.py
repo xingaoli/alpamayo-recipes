@@ -14,15 +14,14 @@
 # limitations under the License.
 
 import os
-from collections import defaultdict
-from itertools import islice
+
 
 import hydra
 import hydra.utils as hyu
 import torch
 
 from omegaconf import DictConfig, OmegaConf
-from tqdm.auto import tqdm
+
 from alpamayo1_5_sft.trainer import ReasoningVLA_Trainer
 from alpamayo1_5_sft.trainer import TrainingArguments
 from alpamayo1_5_sft.models.sft_base_model import TrainableReasoningVLA
@@ -42,12 +41,6 @@ setup_logging()
 logger = logging.RankedLogger(__name__, rank_zero_only=True)
 logger.setLevel("INFO")
 
-
-dtype_map = {
-    "float16": torch.float16,
-    "float32": torch.float32,
-    "bfloat16": torch.bfloat16,
-}
 
 
 @hydra.main(version_base=None, config_path=None, config_name="config")
@@ -83,60 +76,30 @@ def evaluate(cfg: DictConfig) -> None:
     )
 
     trainer = ReasoningVLA_Trainer(
-        model=model, args=training_args, eval_dataset=eval_dataset, data_collator=collate_fn
+        model=model,
+        args=training_args,
+        eval_dataset=eval_dataset,
+        data_collator=collate_fn,
+        eval_metric_runner=hyu.instantiate(cfg.evaluate.metric_runner),
+        eval_torch_dtype=cfg.evaluate.get("torch_dtype", "bfloat16"),
+        eval_max_steps=cfg.evaluate.get("max_eval_steps", -1),
     )
     model = trainer.accelerator.prepare_model(model, evaluation_mode=True)
     model.eval()
-    accelerator = trainer.accelerator
-    is_main_process = accelerator.is_main_process
+    trainer.model = model  # evaluate() runs the metric loop on the prepared model
+    is_main_process = trainer.accelerator.is_main_process
 
-    if cfg.get("wandb", None) and is_main_process:
+    if cfg.get("wandb", None) is not None and is_main_process:
         os.makedirs(cfg.wandb.output_dir, exist_ok=True)
         wandb_utils.init_wandb(**cfg.wandb)
 
-    val_dataloader = trainer.get_eval_dataloader()
-
-    metric_runner = hydra.utils.instantiate(cfg.evaluate.metric_runner)
-
-    max_eval_steps = cfg.evaluate.get("max_eval_steps", -1)
-    if max_eval_steps == -1 or max_eval_steps is None:
-        dataloader_iter = val_dataloader
-        total = len(val_dataloader)
-    else:
-        dataloader_iter = islice(val_dataloader, max_eval_steps)
-        total = max_eval_steps
-
-    metric_sums = defaultdict(float)
-    metric_counts = defaultdict(int)
-    val_count = 0
-
-    for data in tqdm(dataloader_iter, total=total, disable=not is_main_process):
-        output_batch = {}
-        with torch.autocast("cuda", dtype=dtype_map[cfg.evaluate.torch_dtype]):
-            metric_runner.run(model, data, output_batch)
-
-        batch_size = len(data["image_frames"])
-        gathered_batch_size = accelerator.gather_for_metrics(
-            torch.tensor([batch_size], device=accelerator.device, dtype=torch.long)
-        )
-        if is_main_process:
-            val_count += int(gathered_batch_size.sum().item())
-
-        for k, v in output_batch.items():
-            if not k.startswith("metric/"):
-                continue
-            gathered_metric = accelerator.gather_for_metrics(v)
-            if is_main_process:
-                metric_sums[k] += gathered_metric.float().sum().item()
-                metric_counts[k] += gathered_metric.numel()
+    metrics = trainer.evaluate()
 
     if not is_main_process:
         return
 
-    final_metrics_dict = {}
-    for key in metric_sums.keys():
-        if metric_counts[key] > 0:
-            final_metrics_dict["val/" + key] = metric_sums[key] / metric_counts[key]
+    final_metrics_dict = {k: v for k, v in metrics.items() if k != "val/count"}
+    val_count = metrics.get("val/count", 0.0)
 
     padding = 15
     if len(final_metrics_dict) > 0:

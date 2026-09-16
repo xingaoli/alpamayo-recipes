@@ -13,7 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
+from collections import defaultdict
+from itertools import islice
+from typing import Any, Optional
 from dataclasses import dataclass, field
 
 import torch
@@ -53,7 +55,91 @@ class TrainingArguments(HFTrainingArguments):
 
 
 class ReasoningVLA_Trainer(Trainer):
-    """Trainer for Reasoning VLA models with support for custom learning rate multipliers."""
+    """Trainer for Reasoning VLA models with support for custom learning rate multipliers.
+
+    When ``eval_metric_runner`` is provided, :meth:`evaluate` runs the generation-based
+    metric loop from ``evaluate_hf.py`` (``MetricRunner`` over the val dataloader with
+    ``generation_mode`` batches) instead of the built-in loss-only evaluation loop, so the
+    same metrics (``val/metric/*``) are visible periodically during training via
+    ``trainer.eval_strategy``/``eval_steps``.
+    """
+
+    _DTYPE_MAP = {
+        "float16": torch.float16,
+        "float32": torch.float32,
+        "bfloat16": torch.bfloat16,
+    }
+
+    def __init__(
+        self,
+        *args: Any,
+        eval_metric_runner: Any | None = None,
+        eval_torch_dtype: str = "bfloat16",
+        eval_max_steps: int = -1,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.eval_metric_runner = eval_metric_runner
+        self.eval_torch_dtype = self._DTYPE_MAP[eval_torch_dtype]
+        self.eval_max_steps = eval_max_steps
+
+    def evaluate(
+        self,
+        eval_dataset: Any | None = None,
+        ignore_keys: Any | None = None,
+        metric_key_prefix: str = "eval",
+    ) -> dict[str, float]:
+        """Run generation-based metrics on the eval dataset (evaluate_hf.py loop)."""
+        if self.eval_metric_runner is None:
+            return super().evaluate(
+                eval_dataset=eval_dataset,
+                ignore_keys=ignore_keys,
+                metric_key_prefix=metric_key_prefix,
+            )
+
+        dataloader = self.get_eval_dataloader(eval_dataset)
+        if self.eval_max_steps and self.eval_max_steps > 0:
+            dataloader_iter = islice(dataloader, self.eval_max_steps)
+        else:
+            dataloader_iter = dataloader
+
+        was_training = self.model.training
+        self.model.eval()
+        metric_sums: dict[str, float] = defaultdict(float)
+        metric_counts: dict[str, int] = defaultdict(int)
+        val_count = 0
+        try:
+            for data in dataloader_iter:
+                output_batch: dict[str, Any] = {}
+                with torch.autocast("cuda", dtype=self.eval_torch_dtype):
+                    self.eval_metric_runner.run(self.model, data, output_batch)
+
+                batch_size = torch.tensor(
+                    [len(data["image_frames"])], device=self.args.device, dtype=torch.long
+                )
+                gathered_batch_size = self.accelerator.gather_for_metrics(batch_size)
+                if self.accelerator.is_main_process:
+                    val_count += int(gathered_batch_size.sum().item())
+
+                for key, value in output_batch.items():
+                    if not key.startswith("metric/"):
+                        continue
+                    gathered_metric = self.accelerator.gather_for_metrics(value)
+                    if self.accelerator.is_main_process:
+                        metric_sums[key] += gathered_metric.float().sum().item()
+                        metric_counts[key] += gathered_metric.numel()
+        finally:
+            if was_training:
+                self.model.train()
+
+        metrics: dict[str, float] = {}
+        if self.accelerator.is_main_process:
+            for key in metric_sums:
+                if metric_counts[key] > 0:
+                    metrics[f"val/{key}"] = metric_sums[key] / metric_counts[key]
+            metrics["val/count"] = float(val_count)
+            self.log(metrics)
+        return metrics
 
     def create_optimizer(self) -> torch.optim.Optimizer:
         """Create optimizer with custom learning rate multipliers for different parameter groups.
