@@ -3,12 +3,17 @@ __pycache__/
 .venv/
 **/.venv/
 dist/
-outputs
-ckpts
-data
+# Runtime artifact dirs (datasets, checkpoints, outputs — incl. symlinks to
+# shared storage). Scoped to the repo root and recipe dirs: bare `data`/
+# `outputs`/`ckpts` would also swallow tracked source like src/alpamayo/data/.
+/outputs
+/ckpts
+/data
+recipes/*/outputs
+recipes/*/ckpts
+recipes/*/data
 *.egg-info
 output_stage*
-*.egg-info
 
 # Local environment config (paths/credentials); copy from upstream .env.example
 .env
