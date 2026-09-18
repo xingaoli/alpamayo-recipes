@@ -14,6 +14,7 @@ recipes/*/ckpts
 recipes/*/data
 *.egg-info
 output_stage*
+*.log
 
 # Local environment config (paths/credentials); copy from upstream .env.example
 .env

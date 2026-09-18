@@ -41,19 +41,30 @@ NUM_GPUS=${NUM_GPUS:-4}
 CONFIG_NAME=${CONFIG_NAME:-sft_waymo_stage1}
 # Base model for stage 1 — must be the A1-format conversion (see README).
 CKPT=${CKPT:-ckpts/Alpamayo-1.5-10B-A1-format}
-OUTPUT_DIR=${OUTPUT_DIR:-outputs/output_waymo_stage1}
+OUTPUT_DIR=${OUTPUT_DIR:-outputs/output_waymo_stage1_50}
 BATCH_SIZE=${BATCH_SIZE:-4}          # per-device train batch size
-GRAD_ACCUM=${GRAD_ACCUM:-4}          # effective batch = bs * accum * NUM_GPUS
+EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-4} # per-device eval batch size (generation; no grads, so larger than train)
+GRAD_ACCUM=${GRAD_ACCUM:-2}          # effective batch = bs * accum * NUM_GPUS
 LR=${LR:-1e-5}
-NUM_EPOCHS=${NUM_EPOCHS:-3}
-SAVE_STEPS=${SAVE_STEPS:-300}
-EVAL_STEPS=${EVAL_STEPS:--1}
-MAX_EVAL_STEPS=${MAX_EVAL_STEPS:-50} # per-rank eval batches per eval round; -1 = full val set
+NUM_EPOCHS=${NUM_EPOCHS:-4}
+SAVE_STEPS=${SAVE_STEPS:-150}
+EVAL_STEPS=${EVAL_STEPS:-145}
+MAX_EVAL_STEPS=${MAX_EVAL_STEPS:--1} # per-rank eval batches per eval round; -1 = full val set
 NUM_WORKERS=${NUM_WORKERS:-16}
 # Optional (empty = no override): clip subset / step cap — smoke tests.
+# MAX_STEPS is mutually exclusive with NUM_EPOCHS: when set, HF Trainer
+# ignores num_train_epochs (max_steps wins). Leave empty for epoch-driven runs.
 MAX_TRAIN_CLIPS=${MAX_TRAIN_CLIPS:-}
 MAX_VAL_CLIPS=${MAX_VAL_CLIPS:-}
 MAX_STEPS=${MAX_STEPS:-}
+# Optional train-set temporal/clip subsampling (empty = config defaults:
+# num_segments=20, segment_step_us=1000000, clip_stride=1 ≈ 12 t0s/clip).
+# num_segments caps t0s per clip; SEG_STEP_US widens t0 spacing (fewer t0s,
+# clustered at clip start); CLIP_STRIDE keeps every Nth clip (full t0
+# coverage per kept clip). These change the sample set — not epoch length.
+NUM_SEGMENTS=${NUM_SEGMENTS:-}
+SEG_STEP_US=${SEG_STEP_US:-}
+CLIP_STRIDE=${CLIP_STRIDE:-2}
 RESUME_FROM_CHECKPOINT=${RESUME_FROM_CHECKPOINT:-}
 # ----------------------------------------------------------------------------------
 
@@ -67,6 +78,7 @@ OVERRIDES=(
     model.checkpoint_path="${CKPT}"
     paths.output_dir="${OUTPUT_DIR}"
     trainer.per_device_train_batch_size="${BATCH_SIZE}"
+    trainer.per_device_eval_batch_size="${EVAL_BATCH_SIZE}"
     trainer.gradient_accumulation_steps="${GRAD_ACCUM}"
     trainer.learning_rate="${LR}"
     trainer.num_train_epochs="${NUM_EPOCHS}"
@@ -82,6 +94,9 @@ OVERRIDES=(
 [[ -n "$MAX_TRAIN_CLIPS" ]] && OVERRIDES+=("data.train_dataset.max_clips=${MAX_TRAIN_CLIPS}")
 [[ -n "$MAX_VAL_CLIPS" ]] && OVERRIDES+=("data.val_dataset.max_clips=${MAX_VAL_CLIPS}")
 [[ -n "$MAX_STEPS" ]] && OVERRIDES+=("+trainer.max_steps=${MAX_STEPS}")
+[[ -n "$NUM_SEGMENTS" ]] && OVERRIDES+=("data.train_dataset.num_segments=${NUM_SEGMENTS}")
+[[ -n "$SEG_STEP_US" ]] && OVERRIDES+=("data.train_dataset.segment_step_us=${SEG_STEP_US}")
+[[ -n "$CLIP_STRIDE" ]] && OVERRIDES+=("data.train_dataset.clip_stride=${CLIP_STRIDE}")
 [[ -n "$RESUME_FROM_CHECKPOINT" ]] && OVERRIDES+=("resume_from_checkpoint=${RESUME_FROM_CHECKPOINT}")
 
 torchrun --nproc_per_node=${NUM_GPUS} \

@@ -48,15 +48,16 @@ CONFIG_NAME=${CONFIG_NAME:-sft_waymo_stage2}
 BASE_CKPT=${BASE_CKPT:-ckpts/Alpamayo-1.5-10B-A1-format}
 # Stage-1 waymo VLM output to load into the frozen VLM (Trainer checkpoint
 # directory containing model.safetensors shards).
-STAGE1_CKPT=${STAGE1_CKPT:-outputs/output_waymo_stage1/checkpoint-XXXX}
+STAGE1_CKPT=${STAGE1_CKPT:-outputs/output_waymo_stage1_100/checkpoint-300}
 OUTPUT_DIR=${OUTPUT_DIR:-outputs/output_waymo_stage2}
 BATCH_SIZE=${BATCH_SIZE:-4}          # per-device train batch size
-GRAD_ACCUM=${GRAD_ACCUM:-1}          # effective batch = bs * accum * NUM_GPUS
+EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-4} # per-device eval batch size (generation; no grads, so larger than train)
+GRAD_ACCUM=${GRAD_ACCUM:-2}          # effective batch = bs * accum * NUM_GPUS
 LR=${LR:-1e-4}
-NUM_EPOCHS=${NUM_EPOCHS:-1}
-SAVE_STEPS=${SAVE_STEPS:-3000}
-EVAL_STEPS=${EVAL_STEPS:-1000}
-MAX_EVAL_STEPS=${MAX_EVAL_STEPS:-50} # per-rank eval batches per eval round; -1 = full val set
+NUM_EPOCHS=${NUM_EPOCHS:-4}
+SAVE_STEPS=${SAVE_STEPS:-300}
+EVAL_STEPS=${EVAL_STEPS:-295}
+MAX_EVAL_STEPS=${MAX_EVAL_STEPS:--1} # per-rank eval batches per eval round; -1 = full val set
 NUM_WORKERS=${NUM_WORKERS:-16}
 # Optional (empty = no override): clip subset / step cap — smoke tests.
 MAX_TRAIN_CLIPS=${MAX_TRAIN_CLIPS:-}
@@ -82,6 +83,7 @@ OVERRIDES=(
     model.stage1_vlm_checkpoint_path="${STAGE1_CKPT}"
     paths.output_dir="${OUTPUT_DIR}"
     trainer.per_device_train_batch_size="${BATCH_SIZE}"
+    trainer.per_device_eval_batch_size="${EVAL_BATCH_SIZE}"
     trainer.gradient_accumulation_steps="${GRAD_ACCUM}"
     trainer.learning_rate="${LR}"
     trainer.num_train_epochs="${NUM_EPOCHS}"
